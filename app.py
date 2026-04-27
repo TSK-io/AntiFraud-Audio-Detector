@@ -3,7 +3,7 @@ import spaces
 import torch
 import librosa
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
-from audio_guard import UI_DEFAULT_FOCUS, build_guard_prompt, make_error_result, normalize_guard_result
+from audio_guard import UI_DEFAULT_CONTEXT, build_detection_prompt, make_error_result, normalize_guard_result
 
 # 1. 全局加载模型和处理器 (Zero GPU 会先将模型加载到 CPU 内存，推理时动态移至 GPU)
 MODEL_ID = "JimmyMa99/AntiFraud-SFT"
@@ -29,7 +29,7 @@ def process_audio(audio_path, extra_focus):
     try:
         # 使用 librosa 读取音频并重采样到 16000Hz (Qwen2-Audio的标准采样率)
         audio_array, _ = librosa.load(audio_path, sr=16000)
-        guard_prompt = build_guard_prompt(extra_focus)
+        guard_prompt = build_detection_prompt(extra_focus)
         
         # 构造符合 Qwen2-Audio 要求的对话模板
         messages = [
@@ -90,8 +90,8 @@ with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
         with gr.Column():
             audio_input = gr.Audio(type="filepath", label="上传或录制疑似诈骗语音")
             text_input = gr.Textbox(
-                label="补充关注点（可选）", 
-                value=UI_DEFAULT_FOCUS,
+                label="补充关注点或已知转写（可选）", 
+                value=UI_DEFAULT_CONTEXT,
                 lines=3
             )
             submit_btn = gr.Button("开始分析 (Submit)", variant="primary")

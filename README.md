@@ -23,8 +23,10 @@ Check out the configuration reference at https://huggingface.co/docs/hub/spaces-
 
 已将 `read_audio_guard_improved.sh` 中的“证据优先 + 多维度检查 + JSON 约束”逻辑接入 Space：
 
-- `audio_guard.py` 保存反诈判定提示词、字段闭集和结果兜底校验逻辑。
-- `app.py` 继续使用 Zero GPU 上的 `JimmyMa99/AntiFraud-SFT` 模型推理，但输出会被归一化为 Guard JSON。
+- `audio_guard.py` 保存反诈判定提示词、字段闭集、TeleAntiFraud 原生 `is_fraud` 输出兼容逻辑和结果兜底校验逻辑。
+- `app.py` 继续使用 Zero GPU 上的 `JimmyMa99/AntiFraud-SFT` 模型推理，先按原模型训练任务判断 `is_fraud`，再本地归一化为 Guard JSON。
 - `/analyze` 返回稳定结构：`fraud_result`、`risk_level`、`has_fraud_evidence`、`confidence`、`high_risk_behaviors`、`evidence`、`reason`、`suggestion`。
 
 其中高风险结果会经过二次校验：如果没有明确高危行为证据，或置信度低于 `0.6`，系统会自动降级为中风险待复核。
+
+前端的第二个输入框可以填写补充关注点，也可以粘贴已知 ASR/人工转写；这能帮助模型在音频较糊时减少误判。

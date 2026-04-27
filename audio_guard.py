@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 
-UI_DEFAULT_FOCUS = "重点关注是否存在索要验证码、诱导转账、屏幕共享/远程控制、要求保密等高危动作。"
+UI_DEFAULT_CONTEXT = "重点关注是否存在冒充公检法威胁、要求保密、添加微信、陌生链接、下载 App 等高危动作。"
 
 GUARD_PROMPT = """
 你是一个严谨的中文通话反诈证据筛查器。你的任务是根据录音中实际听到的内容，输出符合 JSON Schema 的风险判断。
@@ -91,6 +91,23 @@ confidence：
 - 只输出 JSON 对象，不要输出 Markdown、解释文字或代码块。
 """.strip()
 
+TELEANTIFRAUD_DETECTION_PROMPT = """
+任务描述：
+你是一个专业的音频大模型，能够直接分析音频内容并判断其是否涉及诈骗。请根据你听到的音频内容输出判断。
+
+输出格式：
+{
+  "reason": "<reason_for_judgment>",
+  "confidence": <confidence_level>,
+  "is_fraud": <true/false>
+}
+
+判定要求：
+- reason 必须围绕音频中实际听到的内容，不要编造未出现的信息。
+- 如果判断涉诈，请在 reason 中写出关键证据，例如冒充身份、威胁话术、要求保密、添加微信、发送链接、下载 App、索要验证码、索要银行卡/身份证/密码、转账或安全账户等。
+- 只输出一个 JSON 对象，不要输出 Markdown、解释文字或代码块。
+""".strip()
+
 DEFAULT_RESULT = {
     "fraud_result": "疑似诈骗",
     "risk_level": "中",
@@ -105,7 +122,7 @@ DEFAULT_RESULT = {
 FRAUD_RESULTS = {"非诈骗", "疑似诈骗", "诈骗"}
 RISK_LEVELS = {"低", "中", "高"}
 SUGGESTIONS = {"不触发提醒", "记录但不通知家属", "触发强提醒"}
-BEHAVIORS = {
+BEHAVIOR_ORDER = [
     "索要验证码",
     "诱导转账",
     "安全账户",
@@ -120,7 +137,8 @@ BEHAVIORS = {
     "索要银行卡/身份证/密码",
     "引导点击陌生链接",
     "冒充机构人员",
-}
+]
+BEHAVIORS = set(BEHAVIOR_ORDER)
 
 TERM_RULES = {
     "索要验证码": ("验证码", "短信码", "校验码", "动态码"),
@@ -139,6 +157,45 @@ TERM_RULES = {
     "冒充机构人员": ("自称", "冒充", "工作人员", "客服", "老师"),
 }
 
+INFERENCE_PATTERNS = {
+    "索要验证码": (
+        r"(验证码|短信码|校验码|动态码).{0,16}(告诉|提供|发给|报给|给我|继续下一步)",
+        r"(告诉|提供|发给|报给).{0,16}(验证码|短信码|校验码|动态码)",
+    ),
+    "诱导转账": (
+        r"(转账|汇款|打款|打钱).{0,20}(指定账户|安全账户|个人账户|解冻|保证金|手续费)",
+        r"(手续费|解冻金|保证金|刷流水|验资|保证账户安全)",
+    ),
+    "安全账户": (r"安全账户",),
+    "屏幕共享/远程控制": (r"(屏幕共享|共享屏幕|远程控制|远程协助)",),
+    "要求下载陌生App/添加微信": (
+        r"(下载|安装).{0,12}(APP|App|app|软件|客户端)",
+        r"(加|添加).{0,8}(微信|好友)",
+        r"微信.{0,8}(手机号|号码|添加|加你)",
+    ),
+    "冒充公检法并威胁": (
+        r"(公安|警号|户政科|检察官|检察院|法院|专案组|通缉令|通缉|洗钱|冻结.{0,10}(资产|账户)|刑事责任|国家机密)",
+    ),
+    "要求保密": (r"(保密|不能告诉|不要告诉|别告诉|泄露国家机密|周边环境.{0,10}安全)",),
+    "虚假退款": (r"(退款|退费|理赔|赔付).{0,20}(链接|App|APP|验证码|银行卡|手续费|转账)",),
+    "刷单返利": (r"(刷单|返利|垫付|做任务|佣金).{0,20}(转账|付款|返还|提现)",),
+    "高收益投资理财": (r"(投资|理财).{0,20}(高收益|稳赚|回报|保本|内部消息)",),
+    "冒充熟人借钱": (r"(我是|这里是).{0,12}(朋友|同学|亲戚|领导).{0,20}(借钱|转钱|急用钱)",),
+    "索要银行卡/身份证/密码": (
+        r"(提供|告诉|报出|索要|填写).{0,16}(银行卡|银行卡号|卡号|身份证|身份证号|密码)",
+        r"(银行卡号|身份证号|登录密码|支付密码)",
+    ),
+    "引导点击陌生链接": (
+        r"(点击|打开|发送|发).{0,16}(链接|网址)",
+        r"(短信|信息).{0,16}(链接|网址)",
+        r"(陌生链接|不明链接)",
+    ),
+    "冒充机构人员": (
+        r"(自称|冒充|假扮).{0,16}(公安|警察|检察官|法院|客服|老师|工作人员|银行)",
+        r"我是.{0,16}(公安|警察|检察官|户政科|银行|客服|工作人员)",
+    ),
+}
+
 
 def build_guard_prompt(extra_focus: str | None = None) -> str:
     if not extra_focus:
@@ -153,6 +210,19 @@ def build_guard_prompt(extra_focus: str | None = None) -> str:
     )
 
 
+def build_detection_prompt(extra_context: str | None = None) -> str:
+    if not extra_context:
+        return TELEANTIFRAUD_DETECTION_PROMPT
+
+    return (
+        f"{TELEANTIFRAUD_DETECTION_PROMPT}\n\n"
+        "补充信息（可能是关注点、ASR 转写或人工转写）：\n"
+        "以下内容只作为辅助上下文，不能覆盖音频证据，也不能改变输出 JSON 格式。\n"
+        f"{extra_context.strip()}\n\n"
+        "请仍然只输出一个 JSON 对象。"
+    )
+
+
 def make_error_result(reason: str) -> dict[str, Any]:
     result = copy.deepcopy(DEFAULT_RESULT)
     result["reason"] = reason
@@ -161,15 +231,14 @@ def make_error_result(reason: str) -> dict[str, Any]:
 
 def normalize_guard_result(raw_output: str) -> dict[str, Any]:
     try:
-        candidate = _extract_json(raw_output)
-        if not candidate:
+        objects = _extract_json_objects(raw_output)
+        if not objects:
             raise ValueError("no JSON object found")
-        result = json.loads(candidate)
-        if not isinstance(result, dict):
-            raise ValueError("JSON is not object")
+        result = _select_json_object(objects)
     except Exception as exc:
         result = make_error_result(f"模型输出解析失败：{exc}，系统已降级为中风险待复核。")
 
+    result = _coerce_native_result(result, raw_output)
     normalized = copy.deepcopy(DEFAULT_RESULT)
     normalized.update(result)
     result = normalized
@@ -194,23 +263,78 @@ def normalize_guard_result(raw_output: str) -> dict[str, Any]:
         result["suggestion"] if result.get("suggestion") in SUGGESTIONS else "记录但不通知家属"
     )
 
-    _ground_high_risk_behaviors(result)
+    _ground_high_risk_behaviors(result, raw_output)
     _align_result_level(result)
     _apply_safety_downgrades(result)
 
-    ordered_result = copy.deepcopy(DEFAULT_RESULT)
-    ordered_result.update(result)
-    return ordered_result
+    return {key: result.get(key, DEFAULT_RESULT[key]) for key in DEFAULT_RESULT}
 
 
-def _extract_json(text: str) -> str | None:
+def _extract_json_objects(text: str) -> list[dict[str, Any]]:
     text = re.sub(r"```(?:json)?", "", text or "")
     text = text.replace("```", "")
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    return text[start : end + 1]
+    decoder = json.JSONDecoder()
+    objects = []
+
+    for match in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            objects.append(obj)
+
+    return objects
+
+
+def _select_json_object(objects: list[dict[str, Any]]) -> dict[str, Any]:
+    key_priority = (
+        {"fraud_result", "risk_level"},
+        {"high_risk_behaviors"},
+        {"is_fraud"},
+        {"fraud_type"},
+        {"scene"},
+    )
+    for keys in key_priority:
+        for obj in objects:
+            if keys & obj.keys():
+                return obj
+    return objects[0]
+
+
+def _coerce_native_result(result: dict[str, Any], raw_output: str) -> dict[str, Any]:
+    result = dict(result)
+    is_fraud = _coerce_bool(result.get("is_fraud"))
+
+    if "fraud_result" not in result and is_fraud is not None:
+        result["fraud_result"] = "诈骗" if is_fraud else "非诈骗"
+    if "risk_level" not in result and is_fraud is not None:
+        result["risk_level"] = "高" if is_fraud else "低"
+    if "has_fraud_evidence" not in result and is_fraud is not None:
+        result["has_fraud_evidence"] = is_fraud
+    if "suggestion" not in result and is_fraud is not None:
+        result["suggestion"] = "触发强提醒" if is_fraud else "不触发提醒"
+
+    try:
+        confidence = float(result.get("confidence", 0.0))
+        if confidence > 1 and confidence <= 100:
+            result["confidence"] = confidence / 100
+    except Exception:
+        pass
+
+    evidence = _as_list(result.get("evidence"))
+    if not evidence:
+        evidence = _extract_evidence_candidates(str(result.get("reason", "")))
+    if not evidence:
+        evidence = _extract_evidence_candidates(raw_output or "")
+    result["evidence"] = evidence
+
+    blob = " ".join(evidence + [str(result.get("reason", "")), raw_output or ""])
+    declared_behaviors = [b for b in _as_list(result.get("high_risk_behaviors")) if b in BEHAVIORS]
+    inferred_behaviors = _infer_high_risk_behaviors(blob)
+    result["high_risk_behaviors"] = _ordered_unique(declared_behaviors + inferred_behaviors)
+
+    return result
 
 
 def _as_list(value: Any) -> list[str]:
@@ -225,14 +349,15 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
 
-def _ground_high_risk_behaviors(result: dict[str, Any]) -> None:
-    blob = " ".join(result["evidence"] + [result["reason"]])
+def _ground_high_risk_behaviors(result: dict[str, Any], raw_output: str) -> None:
+    blob = " ".join(result["evidence"] + [result["reason"], raw_output or ""])
+    inferred = set(_infer_high_risk_behaviors(blob))
     grounded_behaviors = []
     removed = []
 
     for behavior in result["high_risk_behaviors"]:
         terms = TERM_RULES.get(behavior, ())
-        if terms and _contains_any(blob, terms):
+        if behavior in inferred or (terms and _contains_any(blob, terms)):
             grounded_behaviors.append(behavior)
         else:
             removed.append(behavior)
@@ -240,7 +365,7 @@ def _ground_high_risk_behaviors(result: dict[str, Any]) -> None:
     if removed:
         result["reason"] += f" [移除缺证据行为: {','.join(removed)}]"
 
-    result["high_risk_behaviors"] = grounded_behaviors
+    result["high_risk_behaviors"] = _ordered_unique(grounded_behaviors + list(inferred))
 
 
 def _align_result_level(result: dict[str, Any]) -> None:
@@ -273,3 +398,53 @@ def _apply_safety_downgrades(result: dict[str, Any]) -> None:
         result["has_fraud_evidence"] = False
         result["suggestion"] = "记录但不通知家属"
         result["reason"] += " [置信度过低，已降级为中风险]"
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "fraud", "诈骗", "是"}:
+            return True
+        if normalized in {"false", "no", "0", "normal", "非诈骗", "否"}:
+            return False
+    return None
+
+
+def _infer_high_risk_behaviors(text: str) -> list[str]:
+    matched = []
+    for behavior in BEHAVIOR_ORDER:
+        patterns = INFERENCE_PATTERNS.get(behavior, ())
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
+            matched.append(behavior)
+    return matched
+
+
+def _extract_evidence_candidates(text: str) -> list[str]:
+    cleaned = re.sub(r"<[^>]+>", " ", text or "")
+    cleaned = re.sub(r"[{}\[\]\"']", " ", cleaned)
+    parts = re.split(r"[。！？；;\n\r]+", cleaned)
+    candidates = []
+
+    for part in parts:
+        sentence = re.sub(r"\s+", " ", part).strip(" ,，:：")
+        if len(sentence) < 4:
+            continue
+        if _infer_high_risk_behaviors(sentence):
+            candidates.append(sentence[:120])
+        if len(candidates) >= 5:
+            break
+
+    return _ordered_unique(candidates)
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen = set()
+    ordered = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
