@@ -3,11 +3,10 @@ import spaces
 import torch
 import librosa
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
+from audio_guard import UI_DEFAULT_FOCUS, build_guard_prompt, make_error_result, normalize_guard_result
 
 # 1. 全局加载模型和处理器 (Zero GPU 会先将模型加载到 CPU 内存，推理时动态移至 GPU)
 MODEL_ID = "JimmyMa99/AntiFraud-SFT"
-DEFAULT_PROMPT = "请分析这段录音内容，判断是否存在电信诈骗风险并说明理由。"
-UI_DEFAULT_PROMPT = "请仔细听这段对话，判断这是不是电信诈骗？如果是，请指出诈骗分子的套路并进行慢思考分析。"
 
 print("正在加载 Processor...")
 processor = AutoProcessor.from_pretrained(MODEL_ID)
@@ -23,22 +22,21 @@ print("模型加载完成！")
 # 2. 定义推理函数并加上 @spaces.GPU 装饰器
 # Zero GPU 只有在执行带有此装饰器的函数时，才会真正分配物理显卡
 @spaces.GPU
-def process_audio(audio_path, text_prompt):
+def process_audio(audio_path, extra_focus):
     if not audio_path:
-        return "⚠️ 请先上传或录制一段音频文件。"
-    if not text_prompt:
-        text_prompt = DEFAULT_PROMPT
+        return make_error_result("请先上传或录制一段音频文件。")
 
     try:
         # 使用 librosa 读取音频并重采样到 16000Hz (Qwen2-Audio的标准采样率)
-        audio_array, sr = librosa.load(audio_path, sr=16000)
+        audio_array, _ = librosa.load(audio_path, sr=16000)
+        guard_prompt = build_guard_prompt(extra_focus)
         
         # 构造符合 Qwen2-Audio 要求的对话模板
         messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": "你是严谨的中文通话反诈证据筛查器，只输出 JSON 对象。"},
             {"role": "user", "content": [
                 {"type": "audio", "audio_url": "dummy_path"}, # processor 需要一个占位符来生成 <|AUDIO|> token
-                {"type": "text", "text": text_prompt}
+                {"type": "text", "text": guard_prompt}
             ]}
         ]
         
@@ -53,17 +51,17 @@ def process_audio(audio_path, text_prompt):
             padding=True
         )
         
-        # 将输入数据明确移动到 GPU
-        inputs = {k: v.to("cuda") for k, v in inputs.items()}
+        # Zero GPU 会在函数执行时分配 CUDA；本地调试时退回到模型所在设备。
+        target_device = "cuda" if torch.cuda.is_available() else model.device
+        inputs = {k: v.to(target_device) for k, v in inputs.items()}
         
         # 生成回答
         with torch.no_grad():
             generated_ids = model.generate(
                 **inputs, 
-                max_new_tokens=1024,
-                temperature=0.7,
-                top_p=0.5,
-                repetition_penalty=1.1
+                max_new_tokens=512,
+                do_sample=False,
+                repetition_penalty=1.05
             )
             
         # 截取新生成的部分并解码
@@ -74,10 +72,10 @@ def process_audio(audio_path, text_prompt):
             clean_up_tokenization_spaces=False
         )[0]
         
-        return response
+        return normalize_guard_result(response)
 
     except Exception as e:
-        return f"处理过程中发生错误: {str(e)}"
+        return make_error_result(f"处理过程中发生错误：{str(e)}")
 
 # 3. 构建 Gradio 界面
 with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
@@ -92,14 +90,14 @@ with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
         with gr.Column():
             audio_input = gr.Audio(type="filepath", label="上传或录制疑似诈骗语音")
             text_input = gr.Textbox(
-                label="附加提示词 (Prompt)", 
-                value=UI_DEFAULT_PROMPT,
+                label="补充关注点（可选）", 
+                value=UI_DEFAULT_FOCUS,
                 lines=3
             )
             submit_btn = gr.Button("开始分析 (Submit)", variant="primary")
             
         with gr.Column():
-            output_text = gr.Textbox(label="模型分析结果 (Analysis Result)", lines=12)
+            output_text = gr.JSON(label="结构化分析结果 (Guard JSON)")
             
     submit_btn.click(
         fn=process_audio,

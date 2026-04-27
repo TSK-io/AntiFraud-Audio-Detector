@@ -18,3 +18,13 @@ Check out the configuration reference at https://huggingface.co/docs/hub/spaces-
 ## Web API
 
 本 Space 通过 Gradio 暴露了外部 API，接口名为 `/analyze`。Space 部署后，可以在页面底部点击 **Use via API** 查看实时生成的调用示例。
+
+## Improved Audio Guard
+
+已将 `read_audio_guard_improved.sh` 中的“证据优先 + 多维度检查 + JSON 约束”逻辑接入 Space：
+
+- `audio_guard.py` 保存反诈判定提示词、字段闭集和结果兜底校验逻辑。
+- `app.py` 继续使用 Zero GPU 上的 `JimmyMa99/AntiFraud-SFT` 模型推理，但输出会被归一化为 Guard JSON。
+- `/analyze` 返回稳定结构：`fraud_result`、`risk_level`、`has_fraud_evidence`、`confidence`、`high_risk_behaviors`、`evidence`、`reason`、`suggestion`。
+
+其中高风险结果会经过二次校验：如果没有明确高危行为证据，或置信度低于 `0.6`，系统会自动降级为中风险待复核。
