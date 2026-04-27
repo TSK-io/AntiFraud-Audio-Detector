@@ -4,6 +4,7 @@ import unittest
 
 from audio_guard import (
     DEFAULT_RESULT,
+    analyze_chat_text,
     build_detection_prompt,
     make_error_result,
     normalize_guard_result,
@@ -113,6 +114,69 @@ class NormalizeGuardResultTest(unittest.TestCase):
         self.assertEqual(second["evidence"], [])
         self.assertEqual(DEFAULT_RESULT["evidence"], [])
         self.assertNotEqual(copy.deepcopy(first), second)
+
+    def test_normalize_guard_result_accepts_dict_input(self):
+        result = normalize_guard_result(
+            {
+                "fraud_result": "诈骗",
+                "risk_level": "高",
+                "confidence": 0.9,
+                "high_risk_behaviors": ["索要验证码"],
+                "evidence": ["请把验证码发给我"],
+                "reason": "聊天中索要验证码。",
+                "suggestion": "触发强提醒",
+            }
+        )
+
+        self.assertEqual(result["fraud_result"], "诈骗")
+        self.assertEqual(result["risk_level"], "高")
+        self.assertTrue(result["has_fraud_evidence"])
+
+    def test_chat_text_detects_high_risk_verification_code(self):
+        result = analyze_chat_text("客服: 退款需要验证，请把短信验证码发给我，随后转到安全账户解冻。")
+
+        self.assertEqual(result["fraud_result"], "诈骗")
+        self.assertEqual(result["risk_level"], "高")
+        self.assertIn("索要验证码", result["high_risk_behaviors"])
+        self.assertIn("安全账户", result["high_risk_behaviors"])
+        self.assertTrue(result["evidence"])
+
+    def test_chat_text_normal_conversation_is_low_risk(self):
+        result = analyze_chat_text("妈妈: 晚上回家吃饭吗？\n我: 回，路上买点水果。")
+
+        self.assertEqual(result["fraud_result"], "非诈骗")
+        self.assertEqual(result["risk_level"], "低")
+        self.assertFalse(result["has_fraud_evidence"])
+        self.assertEqual(result["high_risk_behaviors"], [])
+
+    def test_chat_text_does_not_flag_anti_leak_warning(self):
+        result = analyze_chat_text("银行: 验证码不要告诉任何人，工作人员也不会索要验证码。")
+
+        self.assertEqual(result["fraud_result"], "非诈骗")
+        self.assertNotIn("索要验证码", result["high_risk_behaviors"])
+
+    def test_chat_text_accepts_messages_json(self):
+        result = analyze_chat_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {"sender": "客服", "content": "账户异常，请打开 http://fake.example 填写银行卡号和支付密码。"}
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        )
+
+        self.assertEqual(result["fraud_result"], "诈骗")
+        self.assertIn("引导点击陌生链接", result["high_risk_behaviors"])
+        self.assertIn("索要银行卡/身份证/密码", result["high_risk_behaviors"])
+
+    def test_empty_chat_text_returns_unknown_result(self):
+        result = analyze_chat_text("")
+
+        self.assertEqual(result["fraud_result"], "无法判断")
+        self.assertEqual(result["risk_level"], "未知")
+        self.assertIn("聊天内容为空", result["reason"])
 
 
 if __name__ == "__main__":

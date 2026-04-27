@@ -10,7 +10,14 @@ import librosa
 import numpy as np
 import torch
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
-from audio_guard import UI_DEFAULT_TRANSCRIPT, build_detection_prompt, make_error_result, normalize_guard_result
+from audio_guard import (
+    UI_DEFAULT_CHAT_TEXT,
+    UI_DEFAULT_TRANSCRIPT,
+    analyze_chat_text,
+    build_detection_prompt,
+    make_error_result,
+    normalize_guard_result,
+)
 
 try:
     import spaces
@@ -268,40 +275,80 @@ def resolve_audio_path(audio_input):
     return None
 
 
+def process_chat(chat_input):
+    try:
+        result = analyze_chat_text(chat_input)
+        print(
+            "[chat_analyze] normalized_output="
+            f"{json.dumps(result, ensure_ascii=False)}",
+            flush=True,
+        )
+        return result
+    except Exception as e:
+        print(f"[chat_analyze] error={traceback.format_exc()}", flush=True)
+        return make_error_result(f"处理聊天文本时发生错误：{str(e)}")
+
+
 # 3. 构建 Gradio 界面
-with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
-    gr.Markdown("# 🛡️ AntiFraud-SFT 电信诈骗音频慢思考检测模型")
+with gr.Blocks(title="AntiFraud-SFT 反诈检测") as demo:
+    gr.Markdown("# 🛡️ AntiFraud-SFT 反诈检测")
     gr.Markdown(
-        "基于 **Qwen2-Audio-7B** 微调的防诈骗检测模型。\n\n"
+        "基于 **Qwen2-Audio-7B** 微调的防诈骗检测模型，并提供聊天文本规则识别。\n\n"
         "**说明**: 本环境使用 Hugging Face Zero GPU。模型启动约需1-2分钟，点击 Submit 后系统会动态分配显卡进行计算。\n\n"
-        "**外部 API**: 本 Space 接口，可在页面底部 **Use via API** 查看调用示例。"
+        "**外部 API**: 语音接口 `/analyze`，聊天文本接口 `/chat_analyze`。可在页面底部 **Use via API** 查看调用示例。"
     )
-    
-    with gr.Row():
-        with gr.Column():
-            audio_input = gr.Audio(
-                sources=["upload", "microphone"],
-                type="filepath",
-                label="上传或录制待检测语音",
-                editable=False,
+
+    with gr.Tabs():
+        with gr.Tab("语音检测"):
+            with gr.Row():
+                with gr.Column():
+                    audio_input = gr.Audio(
+                        sources=["upload", "microphone"],
+                        type="filepath",
+                        label="上传或录制待检测语音",
+                        editable=False,
+                    )
+                    text_input = gr.Textbox(
+                        label="已知转写（可选，不填也可以）",
+                        value=UI_DEFAULT_TRANSCRIPT,
+                        placeholder="如果已有 ASR/人工转写，可以粘贴在这里；没有就留空。",
+                        lines=3
+                    )
+                    submit_btn = gr.Button("开始分析 (Submit)", variant="primary")
+
+                with gr.Column():
+                    output_text = gr.JSON(label="结构化分析结果 (Guard JSON)")
+
+            submit_btn.click(
+                fn=process_audio,
+                inputs=[audio_input, text_input],
+                outputs=output_text,
+                api_name="analyze"
             )
-            text_input = gr.Textbox(
-                label="已知转写（可选，不填也可以）", 
-                value=UI_DEFAULT_TRANSCRIPT,
-                placeholder="如果已有 ASR/人工转写，可以粘贴在这里；没有就留空。",
-                lines=3
+
+        with gr.Tab("聊天文本检测"):
+            with gr.Row():
+                with gr.Column():
+                    chat_input = gr.Textbox(
+                        label="聊天记录或 messages JSON",
+                        value=UI_DEFAULT_CHAT_TEXT,
+                        placeholder=(
+                            "支持直接粘贴聊天记录，也支持 JSON："
+                            "{\"messages\":[{\"sender\":\"客服\",\"content\":\"请把验证码发给我\"}]}"
+                        ),
+                        lines=12,
+                    )
+                    chat_submit_btn = gr.Button("分析聊天文本", variant="primary")
+
+                with gr.Column():
+                    chat_output = gr.JSON(label="聊天文本分析结果 (Guard JSON)")
+
+            chat_submit_btn.click(
+                fn=process_chat,
+                inputs=chat_input,
+                outputs=chat_output,
+                api_name="chat_analyze"
             )
-            submit_btn = gr.Button("开始分析 (Submit)", variant="primary")
-            
-        with gr.Column():
-            output_text = gr.JSON(label="结构化分析结果 (Guard JSON)")
-            
-    submit_btn.click(
-        fn=process_audio,
-        inputs=[audio_input, text_input],
-        outputs=output_text,
-        api_name="analyze"
-    )
 
 # 启动服务，关闭 SSR 以避免 asyncio 报错
 if __name__ == "__main__":

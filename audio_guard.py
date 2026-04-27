@@ -6,8 +6,11 @@ from typing import Any
 
 
 UI_DEFAULT_TRANSCRIPT = ""
+UI_DEFAULT_CHAT_TEXT = ""
 MAX_MODEL_OUTPUT_CHARS = 20000
 MAX_TRANSCRIPT_CHARS = 4000
+MAX_CHAT_TEXT_CHARS = 12000
+MAX_CHAT_MESSAGES = 200
 MAX_EXTRA_FOCUS_CHARS = 2000
 MAX_REASON_CHARS = 600
 MAX_EVIDENCE_ITEMS = 8
@@ -149,6 +152,98 @@ BEHAVIOR_ORDER = [
     "冒充机构人员",
 ]
 BEHAVIORS = set(BEHAVIOR_ORDER)
+CHAT_WEAK_BEHAVIORS = {"要求下载陌生App/添加微信", "引导点击陌生链接", "冒充机构人员"}
+CHAT_BEHAVIOR_PATTERNS = {
+    "索要验证码": (
+        r"(?:把|将|收到|短信|手机|平台|银行)?[^。！？\n\r]{0,12}验证码[^。！？\n\r]{0,24}(?:告诉|发给|发来|给我|报给|报一下|回复|复制|截图|截屏|提交|提供)",
+        r"(?:告诉|发给|发来|报给|报一下|回复|提供|复制|截图|截屏)[^。！？\n\r]{0,12}验证码",
+    ),
+    "诱导转账": (
+        r"(?:转账|打款|汇款|付款|充值|垫付)[^。！？\n\r]{0,24}(?:指定账户|安全账户|对公账户|银行卡|账户|账号)",
+        r"(?:先|马上|立即|现在)[^。！？\n\r]{0,16}(?:转|汇|打|付|充值|垫付)",
+        r"(?:先|需要|必须)[^。！？\n\r]{0,12}(?:交|缴|支付|付)[^。！？\n\r]{0,16}(?:手续费|保证金|解冻金|认证金|刷流水|押金)",
+        r"(?:转|汇|打)[^。！？\n\r]{0,10}(?:安全账户|指定账户|对公账户)",
+    ),
+    "安全账户": (
+        r"安全账户",
+        r"监管账户",
+        r"清查账户",
+    ),
+    "屏幕共享/远程控制": (
+        r"屏幕共享",
+        r"共享屏幕",
+        r"远程控制",
+        r"远程协助",
+        r"(?:下载|打开|安装)[^。！？\n\r]{0,16}(?:向日葵|todesk|teamviewer|会议软件)",
+    ),
+    "要求下载陌生App/添加微信": (
+        r"(?:下载|安装)[^。！？\n\r]{0,16}(?:App|APP|app|软件|客户端|会议|插件|安装包)",
+        r"(?:添加|加|联系)[^。！？\n\r]{0,12}(?:微信|QQ|qq|客服|专员|助理)",
+    ),
+    "冒充公检法并威胁": (
+        r"(?:公安|警察|检察院|法院|刑侦|网警|通缉|洗钱|涉案|立案)[^。！？\n\r]{0,30}(?:冻结|逮捕|抓捕|传唤|坐牢|后果|不配合|保密|通缉)",
+        r"(?:冻结|逮捕|抓捕|传唤|坐牢|后果|不配合)[^。！？\n\r]{0,30}(?:公安|警察|检察院|法院|刑侦|网警|通缉|洗钱|涉案)",
+    ),
+    "要求保密": (
+        r"(?:不要|不能|别)[^。！？\n\r]{0,12}(?:告诉|联系|通知)[^。！？\n\r]{0,12}(?:家人|子女|朋友|银行|警察|任何人)",
+        r"全程保密",
+        r"保持通话",
+        r"不要挂电话",
+        r"不要报警",
+    ),
+    "虚假退款": (
+        r"(?:退款|理赔|退费|赔付|赔偿)[^。！？\n\r]{0,30}(?:链接|验证码|银行卡|转账|手续费|下载|屏幕共享|添加微信|加微信|账户异常)",
+        r"(?:链接|验证码|银行卡|转账|手续费|下载|屏幕共享|添加微信|加微信|账户异常)[^。！？\n\r]{0,30}(?:退款|理赔|退费|赔付|赔偿)",
+    ),
+    "刷单返利": (
+        r"刷单",
+        r"做任务[^。！？\n\r]{0,12}返利",
+        r"点赞[^。！？\n\r]{0,12}返利",
+        r"垫付单",
+        r"派单",
+        r"返佣",
+        r"佣金[^。！？\n\r]{0,10}提现",
+    ),
+    "高收益投资理财": (
+        r"稳赚",
+        r"保本[^。！？\n\r]{0,8}高收益",
+        r"内幕消息",
+        r"导师带单",
+        r"荐股群",
+        r"投资群",
+        r"虚拟币",
+        r"数字货币",
+        r"USDT",
+        r"泰达币",
+        r"收益翻倍",
+        r"日收益",
+    ),
+    "冒充熟人借钱": (
+        r"(?:我是|我换号了|手机坏了|不方便接电话)[^。！？\n\r]{0,20}(?:借|转|垫)[^。！？\n\r]{0,10}(?:钱|款)",
+        r"(?:领导|老板|同学|朋友|亲戚|老师)[^。！？\n\r]{0,20}(?:借钱|周转|垫付|转点钱)",
+    ),
+    "索要银行卡/身份证/密码": (
+        r"(?:银行卡号|银行卡|卡号|身份证号|身份证|支付密码|登录密码|密码|cvv|CVV|有效期)[^。！？\n\r]{0,24}(?:告诉|发给|提供|输入|填写|报一下|核对|提交)",
+        r"(?:告诉|发给|提供|输入|填写|报一下|核对|提交)[^。！？\n\r]{0,16}(?:银行卡号|卡号|身份证号|支付密码|登录密码|密码|cvv|CVV|有效期)",
+    ),
+    "引导点击陌生链接": (
+        r"https?://[^\s，。！？]+",
+        r"www\.[^\s，。！？]+",
+        r"(?:点击|打开|复制|访问|填写|登录)[^。！？\n\r]{0,12}(?:链接|网址|开户链接|短链接)",
+    ),
+    "冒充机构人员": (
+        r"(?:我是|这里是)[^。！？\n\r]{0,15}(?:客服|官方|银行|平台|快递|医保|社保|税务|公安|法院|检察院|老师|学校|运营商|贷款专员)",
+        r"(?:客服|官方|银行|平台|快递|医保|社保|税务|公安|法院|检察院|运营商)[^。！？\n\r]{0,12}(?:通知|核实|处理|风控|冻结|异常)",
+    ),
+}
+CHAT_SUSPICIOUS_PATTERNS = (
+    ("账户异常/冻结", r"账户异常|账号异常|冻结|风控|涉案|涉嫌|洗钱|逾期|影响征信"),
+    ("退款/理赔", r"退款|理赔|退费|赔付|赔偿"),
+    ("中奖/福利", r"中奖|抽奖|免费领取|福利补贴"),
+    ("贷款/额度", r"贷款额度|提升额度|低息贷款|免息贷款"),
+    ("资金门槛", r"刷流水|保证金|解冻金|认证金|手续费|押金"),
+    ("二维码/收款码", r"二维码|收款码"),
+)
 
 
 def build_guard_prompt(extra_focus: str | None = None) -> str:
@@ -178,6 +273,115 @@ def build_detection_prompt(transcript: str | None = None) -> str:
     )
 
 
+def analyze_chat_text(chat_input: Any) -> dict[str, Any]:
+    chat_text = normalize_chat_input(chat_input).strip()
+    if not chat_text:
+        return make_error_result("聊天内容为空，请粘贴聊天记录或传入 messages JSON。")
+
+    chat_text = _bounded_text(chat_text, MAX_CHAT_TEXT_CHARS)
+    behavior_evidence = _detect_chat_behaviors(chat_text)
+    suspicious_signals = _detect_chat_suspicious_signals(chat_text)
+
+    if "冒充机构人员" in behavior_evidence and len(behavior_evidence) == 1 and not suspicious_signals:
+        behavior_evidence.pop("冒充机构人员")
+
+    behaviors = [behavior for behavior in BEHAVIOR_ORDER if behavior in behavior_evidence]
+    evidence = []
+    for behavior in behaviors:
+        evidence.extend(behavior_evidence[behavior])
+    if not evidence:
+        evidence.extend(signal["evidence"] for signal in suspicious_signals)
+    evidence = _clean_evidence_items(evidence)
+
+    strong_behaviors = [behavior for behavior in behaviors if behavior not in CHAT_WEAK_BEHAVIORS]
+    if strong_behaviors or len(behaviors) >= 2:
+        behavior_text = "、".join(behaviors)
+        reason = f"聊天文本中出现明确风险要求：{behavior_text}。"
+        if evidence:
+            reason += f" 关键片段：{evidence[0]}。"
+        result = {
+            "fraud_result": "诈骗",
+            "risk_level": "高",
+            "has_fraud_evidence": True,
+            "confidence": 0.9 if len(behaviors) >= 2 else 0.82,
+            "high_risk_behaviors": behaviors,
+            "evidence": evidence,
+            "reason": reason,
+            "suggestion": "触发强提醒",
+        }
+    elif behaviors or suspicious_signals:
+        labels = behaviors or [signal["label"] for signal in suspicious_signals]
+        reason = f"聊天文本中出现可疑信号：{'、'.join(labels[:4])}。"
+        if evidence:
+            reason += f" 关键片段：{evidence[0]}。"
+        reason += " 证据仍不完整，按疑似诈骗记录。"
+        result = {
+            "fraud_result": "疑似诈骗",
+            "risk_level": "中",
+            "has_fraud_evidence": bool(evidence or behaviors),
+            "confidence": 0.68,
+            "high_risk_behaviors": behaviors,
+            "evidence": evidence,
+            "reason": reason,
+            "suggestion": "记录但不通知家属",
+        }
+    else:
+        result = {
+            "fraud_result": "非诈骗",
+            "risk_level": "低",
+            "has_fraud_evidence": False,
+            "confidence": 0.78,
+            "high_risk_behaviors": [],
+            "evidence": [],
+            "reason": "聊天文本中没有发现索要验证码、转账、屏幕共享、陌生链接、敏感信息或保密施压等明确风险要求。",
+            "suggestion": "不触发提醒",
+        }
+
+    return normalize_guard_result(result, evidence_context=chat_text)
+
+
+def normalize_chat_input(chat_input: Any) -> str:
+    if chat_input is None:
+        return ""
+
+    if isinstance(chat_input, str):
+        stripped = chat_input.strip()
+        if not stripped:
+            return ""
+        if stripped[0] in "[{":
+            try:
+                return normalize_chat_input(json.loads(stripped))
+            except json.JSONDecodeError:
+                return stripped
+        return stripped
+
+    if isinstance(chat_input, list):
+        return _format_chat_messages(chat_input[:MAX_CHAT_MESSAGES])
+
+    if isinstance(chat_input, dict):
+        for key in ("messages", "chat", "records", "items"):
+            value = chat_input.get(key)
+            if isinstance(value, list):
+                return _format_chat_messages(value[:MAX_CHAT_MESSAGES])
+
+        direct_text = _first_text_value(chat_input, ("content", "text", "message", "body", "msg"))
+        if direct_text:
+            sender = _first_text_value(chat_input, ("sender", "from", "speaker", "role", "name", "nickname"))
+            return f"{sender}: {direct_text}" if sender else direct_text
+
+        parts = []
+        for key, value in chat_input.items():
+            if isinstance(value, (dict, list)):
+                nested = normalize_chat_input(value)
+                if nested:
+                    parts.append(nested)
+            elif value not in (None, ""):
+                parts.append(f"{key}: {value}")
+        return "\n".join(parts)
+
+    return str(chat_input)
+
+
 def make_error_result(reason: str) -> dict[str, Any]:
     result = copy.deepcopy(DEFAULT_RESULT)
     result["reason"] = _bounded_text(reason, MAX_REASON_CHARS)
@@ -185,14 +389,18 @@ def make_error_result(reason: str) -> dict[str, Any]:
 
 
 def normalize_guard_result(raw_output: Any, evidence_context: str | None = None) -> dict[str, Any]:
-    raw_text = _bounded_text(raw_output, MAX_MODEL_OUTPUT_CHARS)
-    try:
-        objects = _extract_json_objects(raw_text)
-        if not objects:
-            raise ValueError("no JSON object found")
-        result = _select_json_object(objects)
-    except Exception as exc:
-        result = make_error_result(f"模型输出解析失败：{exc}。本次不做兜底判断。")
+    if isinstance(raw_output, dict):
+        result = copy.deepcopy(raw_output)
+        raw_text = _bounded_text(json.dumps(raw_output, ensure_ascii=False), MAX_MODEL_OUTPUT_CHARS)
+    else:
+        raw_text = _bounded_text(raw_output, MAX_MODEL_OUTPUT_CHARS)
+        try:
+            objects = _extract_json_objects(raw_text)
+            if not objects:
+                raise ValueError("no JSON object found")
+            result = _select_json_object(objects)
+        except Exception as exc:
+            result = make_error_result(f"模型输出解析失败：{exc}。本次不做兜底判断。")
 
     result = _coerce_native_result(result, raw_text, evidence_context)
     normalized = copy.deepcopy(DEFAULT_RESULT)
@@ -261,6 +469,91 @@ def _select_json_object(objects: list[dict[str, Any]]) -> dict[str, Any]:
             if keys & obj.keys():
                 return obj
     return objects[0]
+
+
+def _format_chat_messages(messages: list[Any]) -> str:
+    lines = []
+    for message in messages:
+        if isinstance(message, dict):
+            content = _first_text_value(message, ("content", "text", "message", "body", "msg"))
+            sender = _first_text_value(message, ("sender", "from", "speaker", "role", "name", "nickname"))
+            if content:
+                lines.append(f"{sender}: {content}" if sender else content)
+                continue
+        text = normalize_chat_input(message).strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def _first_text_value(data: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if value not in (None, "") and not isinstance(value, (dict, list)):
+            return str(value).strip()
+    return ""
+
+
+def _detect_chat_behaviors(text: str) -> dict[str, list[str]]:
+    evidence_by_behavior = {}
+    for behavior, patterns in CHAT_BEHAVIOR_PATTERNS.items():
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                if _is_negated_chat_match(text, match.start(), match.end()):
+                    continue
+                evidence_by_behavior.setdefault(behavior, []).append(
+                    _extract_chat_evidence(text, match.start(), match.end())
+                )
+                break
+            if behavior in evidence_by_behavior:
+                break
+    return evidence_by_behavior
+
+
+def _detect_chat_suspicious_signals(text: str) -> list[dict[str, str]]:
+    signals = []
+    for label, pattern in CHAT_SUSPICIOUS_PATTERNS:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match or _is_negated_chat_match(text, match.start(), match.end()):
+            continue
+        signals.append(
+            {
+                "label": label,
+                "evidence": _extract_chat_evidence(text, match.start(), match.end()),
+            }
+        )
+    return signals
+
+
+def _is_negated_chat_match(text: str, start: int, end: int) -> bool:
+    prefix = text[max(0, start - 8) : start]
+    if re.search(r"(不要|不能|别|切勿|请勿|无需|不需要|不可)[^。！？\n\r]{0,3}$", prefix):
+        return True
+
+    line = _extract_chat_evidence(text, start, end)
+    anti_leak_warning = re.search(
+        r"(不要|不能|别|切勿|请勿)[^。！？\n\r]{0,10}(告诉|发给|提供|泄露)[^。！？\n\r]{0,10}(任何人|别人|他人|客服|工作人员)",
+        line,
+    )
+    return bool(anti_leak_warning and not re.search(r"(给我|发我|报给我|告诉我)", line))
+
+
+def _extract_chat_evidence(text: str, start: int, end: int) -> str:
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end == -1:
+        line_end = len(text)
+    line = re.sub(r"\s+", " ", text[line_start:line_end]).strip()
+    if len(line) <= MAX_EVIDENCE_CHARS:
+        return line
+
+    half_window = max(20, MAX_EVIDENCE_CHARS // 2)
+    snippet_start = max(0, start - half_window)
+    snippet_end = min(len(text), end + half_window)
+    snippet = re.sub(r"\s+", " ", text[snippet_start:snippet_end]).strip()
+    return _bounded_text(snippet, MAX_EVIDENCE_CHARS)
 
 
 def _coerce_native_result(
