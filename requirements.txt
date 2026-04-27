@@ -1,6 +1,7 @@
 transformers>=4.45.0
 torch
 torchaudio
+numpy
 librosa
 spaces
 gradio

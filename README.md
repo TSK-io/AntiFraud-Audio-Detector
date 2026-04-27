@@ -30,3 +30,17 @@ Check out the configuration reference at https://huggingface.co/docs/hub/spaces-
 如果处理器没有生成音频特征，或模型输出无法解析，接口会返回 `fraud_result="无法判断"`、`risk_level="未知"`，不会自动改写成非诈骗或疑似诈骗。
 
 前端的第二个输入框默认留空；如果已有 ASR/人工转写，可以粘贴进去辅助判断。不要把“重点关注某类风险”的提示词当作默认输入，否则模型可能把提示词误当成音频证据。
+
+## Stability Guards
+
+- 应用启动时会尝试加载模型；如果模型加载失败，Gradio 页面仍会启动，并在后续请求中重试加载。
+- 上传音频会先检查文件是否存在、是否为空、大小、时长、解码结果和非有限采样值，再进入模型推理。
+- 默认限制：`AUDIO_GUARD_MAX_SECONDS=180`、`AUDIO_GUARD_MAX_MB=80`、`AUDIO_GUARD_MIN_SECONDS=0.2`。环境变量格式错误时会退回默认值。
+- 提示词现在直接要求完整 Guard JSON 字段；仍兼容模型返回旧版 `{"is_fraud": true/false}` 的情况。
+- 规范化层会裁剪过长输出、清洗证据字段、限制证据数量、过滤非闭集高危行为，并确保低置信度结果不会被返回为高风险。
+
+## Local Tests
+
+```bash
+python -B -m unittest discover -s tests -v
+```
