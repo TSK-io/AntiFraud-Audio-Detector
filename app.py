@@ -274,7 +274,7 @@ with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
     gr.Markdown(
         "基于 **Qwen2-Audio-7B** 微调的防诈骗检测模型。\n\n"
         "**说明**: 本环境使用 Hugging Face Zero GPU。模型启动约需1-2分钟，点击 Submit 后系统会动态分配显卡进行计算。\n\n"
-        "**外部 API**: 本 Space 已暴露 `/analyze` 接口，可在页面底部 **Use via API** 查看调用示例。"
+        "**外部 API**: 本 Space 接口，可在页面底部 **Use via API** 查看调用示例。"
     )
     
     with gr.Row():
