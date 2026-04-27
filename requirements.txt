@@ -5,4 +5,3 @@ librosa
 spaces
 gradio
 accelerate
-git clone git@hf.co:spaces/xsssqqqqxx/AntiFraud-Audio-Detector
