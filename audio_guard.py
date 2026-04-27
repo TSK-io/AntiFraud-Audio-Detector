@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 
-UI_DEFAULT_CONTEXT = "重点关注是否存在冒充公检法威胁、要求保密、添加微信、陌生链接、下载 App 等高危动作。"
+UI_DEFAULT_TRANSCRIPT = ""
 
 GUARD_PROMPT = """
 你是一个严谨的中文通话反诈证据筛查器。你的任务是根据录音中实际听到的内容，输出符合 JSON Schema 的风险判断。
@@ -93,7 +93,7 @@ confidence：
 
 TELEANTIFRAUD_DETECTION_PROMPT = """
 任务描述：
-你是一个专业的音频大模型，能够直接分析音频内容并判断其是否涉及诈骗。请根据你听到的音频内容输出判断。
+你是一个通用的中文通话反诈检测模型。请根据你听到的音频内容，判断这通电话是否涉及诈骗。
 
 输出格式：
 {
@@ -104,7 +104,9 @@ TELEANTIFRAUD_DETECTION_PROMPT = """
 
 判定要求：
 - reason 必须围绕音频中实际听到的内容，不要编造未出现的信息。
-- 如果判断涉诈，请在 reason 中写出关键证据，例如冒充身份、威胁话术、要求保密、添加微信、发送链接、下载 App、索要验证码、索要银行卡/身份证/密码、转账或安全账户等。
+- 普通生活聊天、同学室友帮忙带饭、正常购物付款、正常客服沟通、正常预约和打车沟通都不是诈骗。
+- 只有音频中出现明确危险要求、冒充身份、威胁施压、索取敏感信息、异常转账或异常链接/App 等证据时，才判断 is_fraud 为 true。
+- 如果判断涉诈，reason 必须引用音频里的关键原话或近似短句作为证据；不要复述本任务说明里的类别名。
 - 只输出一个 JSON 对象，不要输出 Markdown、解释文字或代码块。
 """.strip()
 
@@ -210,15 +212,14 @@ def build_guard_prompt(extra_focus: str | None = None) -> str:
     )
 
 
-def build_detection_prompt(extra_context: str | None = None) -> str:
-    if not extra_context:
+def build_detection_prompt(transcript: str | None = None) -> str:
+    if not transcript:
         return TELEANTIFRAUD_DETECTION_PROMPT
 
     return (
         f"{TELEANTIFRAUD_DETECTION_PROMPT}\n\n"
-        "补充信息（可能是关注点、ASR 转写或人工转写）：\n"
-        "以下内容只作为辅助上下文，不能覆盖音频证据，也不能改变输出 JSON 格式。\n"
-        f"{extra_context.strip()}\n\n"
+        "可选辅助转写（可能有错字，以音频为准）：\n"
+        f"{transcript.strip()}\n\n"
         "请仍然只输出一个 JSON 对象。"
     )
 
@@ -229,7 +230,7 @@ def make_error_result(reason: str) -> dict[str, Any]:
     return result
 
 
-def normalize_guard_result(raw_output: str) -> dict[str, Any]:
+def normalize_guard_result(raw_output: str, evidence_context: str | None = None) -> dict[str, Any]:
     try:
         objects = _extract_json_objects(raw_output)
         if not objects:
@@ -238,7 +239,7 @@ def normalize_guard_result(raw_output: str) -> dict[str, Any]:
     except Exception as exc:
         result = make_error_result(f"模型输出解析失败：{exc}，系统已降级为中风险待复核。")
 
-    result = _coerce_native_result(result, raw_output)
+    result = _coerce_native_result(result, raw_output, evidence_context)
     normalized = copy.deepcopy(DEFAULT_RESULT)
     normalized.update(result)
     result = normalized
@@ -263,9 +264,9 @@ def normalize_guard_result(raw_output: str) -> dict[str, Any]:
         result["suggestion"] if result.get("suggestion") in SUGGESTIONS else "记录但不通知家属"
     )
 
-    _ground_high_risk_behaviors(result, raw_output)
+    _ground_high_risk_behaviors(result, raw_output, evidence_context)
     _align_result_level(result)
-    _apply_safety_downgrades(result)
+    _apply_safety_downgrades(result, evidence_context)
 
     return {key: result.get(key, DEFAULT_RESULT[key]) for key in DEFAULT_RESULT}
 
@@ -302,7 +303,11 @@ def _select_json_object(objects: list[dict[str, Any]]) -> dict[str, Any]:
     return objects[0]
 
 
-def _coerce_native_result(result: dict[str, Any], raw_output: str) -> dict[str, Any]:
+def _coerce_native_result(
+    result: dict[str, Any],
+    raw_output: str,
+    evidence_context: str | None = None,
+) -> dict[str, Any]:
     result = dict(result)
     is_fraud = _coerce_bool(result.get("is_fraud"))
 
@@ -322,14 +327,16 @@ def _coerce_native_result(result: dict[str, Any], raw_output: str) -> dict[str, 
     except Exception:
         pass
 
-    evidence = _as_list(result.get("evidence"))
+    evidence = _clean_evidence_items(_as_list(result.get("evidence")))
     if not evidence:
         evidence = _extract_evidence_candidates(str(result.get("reason", "")))
+    if not evidence:
+        evidence = _extract_evidence_candidates(evidence_context or "")
     if not evidence:
         evidence = _extract_evidence_candidates(raw_output or "")
     result["evidence"] = evidence
 
-    blob = " ".join(evidence + [str(result.get("reason", "")), raw_output or ""])
+    blob = _evidence_blob(evidence, str(result.get("reason", "")), evidence_context)
     declared_behaviors = [b for b in _as_list(result.get("high_risk_behaviors")) if b in BEHAVIORS]
     inferred_behaviors = _infer_high_risk_behaviors(blob)
     result["high_risk_behaviors"] = _ordered_unique(declared_behaviors + inferred_behaviors)
@@ -349,15 +356,18 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
 
-def _ground_high_risk_behaviors(result: dict[str, Any], raw_output: str) -> None:
-    blob = " ".join(result["evidence"] + [result["reason"], raw_output or ""])
+def _ground_high_risk_behaviors(
+    result: dict[str, Any],
+    raw_output: str,
+    evidence_context: str | None = None,
+) -> None:
+    blob = _evidence_blob(result["evidence"], result["reason"], evidence_context)
     inferred = set(_infer_high_risk_behaviors(blob))
     grounded_behaviors = []
     removed = []
 
     for behavior in result["high_risk_behaviors"]:
-        terms = TERM_RULES.get(behavior, ())
-        if behavior in inferred or (terms and _contains_any(blob, terms)):
+        if behavior in inferred:
             grounded_behaviors.append(behavior)
         else:
             removed.append(behavior)
@@ -384,13 +394,17 @@ def _align_result_level(result: dict[str, Any]) -> None:
         result["suggestion"] = "触发强提醒"
 
 
-def _apply_safety_downgrades(result: dict[str, Any]) -> None:
+def _apply_safety_downgrades(result: dict[str, Any], evidence_context: str | None = None) -> None:
     if result["risk_level"] == "高" and not result["high_risk_behaviors"]:
-        result["fraud_result"] = "疑似诈骗"
-        result["risk_level"] = "中"
+        suspicious = _has_suspicious_signal(_evidence_blob(result["evidence"], result["reason"], evidence_context))
+        result["fraud_result"] = "疑似诈骗" if suspicious else "非诈骗"
+        result["risk_level"] = "中" if suspicious else "低"
         result["has_fraud_evidence"] = False
-        result["suggestion"] = "记录但不通知家属"
-        result["reason"] += " [高风险无行为证据，已降级为中风险]"
+        result["suggestion"] = "记录但不通知家属" if suspicious else "不触发提醒"
+        cleaned_reason = _remove_prompt_artifacts(result["reason"]).strip()
+        if not cleaned_reason:
+            result["reason"] = "未提取到音频中的明确诈骗高危行为证据。"
+        result["reason"] += " [未提取到明确高危行为证据，已按证据强度降级]"
 
     if result["confidence"] < 0.6 and result["risk_level"] == "高":
         result["fraud_result"] = "疑似诈骗"
@@ -413,16 +427,18 @@ def _coerce_bool(value: Any) -> bool | None:
 
 
 def _infer_high_risk_behaviors(text: str) -> list[str]:
+    text = _remove_prompt_artifacts(text)
     matched = []
     for behavior in BEHAVIOR_ORDER:
         patterns = INFERENCE_PATTERNS.get(behavior, ())
-        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
+        if any(_has_non_negated_match(text, pattern) for pattern in patterns):
             matched.append(behavior)
     return matched
 
 
 def _extract_evidence_candidates(text: str) -> list[str]:
-    cleaned = re.sub(r"<[^>]+>", " ", text or "")
+    cleaned = _remove_prompt_artifacts(text or "")
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
     cleaned = re.sub(r"[{}\[\]\"']", " ", cleaned)
     parts = re.split(r"[。！？；;\n\r]+", cleaned)
     candidates = []
@@ -437,6 +453,83 @@ def _extract_evidence_candidates(text: str) -> list[str]:
             break
 
     return _ordered_unique(candidates)
+
+
+def _clean_evidence_items(items: list[str]) -> list[str]:
+    cleaned = []
+    for item in items:
+        text = _remove_prompt_artifacts(str(item)).strip(" ,，:：。")
+        if text:
+            cleaned.append(text)
+    return _ordered_unique(cleaned)
+
+
+def _evidence_blob(evidence: list[str], reason: str, evidence_context: str | None = None) -> str:
+    parts = evidence + [reason]
+    if _looks_like_transcript(evidence_context):
+        parts.append(evidence_context or "")
+    return _remove_prompt_artifacts(" ".join(parts))
+
+
+def _looks_like_transcript(text: str | None) -> bool:
+    if not text or len(text.strip()) < 20:
+        return False
+    return bool(re.search(r"[\n\r]|[：:]", text))
+
+
+def _remove_prompt_artifacts(text: str) -> str:
+    lines = re.split(r"[\n\r。！？；;]+", text or "")
+    kept = []
+    artifact_patterns = (
+        r"例如",
+        r"比如",
+        r"如果判断涉诈",
+        r"如果存在",
+        r"请在\s*reason",
+        r"本任务",
+        r"任务说明",
+        r"类别名",
+        r"关键证据",
+        r"高危动作",
+        r"这些都",
+        r"这些属于",
+        r"可能涉及诈骗",
+        r"潜在受害方",
+        r"音频特征中",
+        r"逻辑矛盾",
+    )
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if any(re.search(pattern, stripped, flags=re.IGNORECASE) for pattern in artifact_patterns):
+            continue
+        kept.append(stripped)
+    return "。".join(kept)
+
+
+def _has_suspicious_signal(text: str) -> bool:
+    suspicious_patterns = (
+        r"(公安|警号|检察|法院|通缉|洗钱|冻结|刑事责任|国家机密)",
+        r"(验证码|短信码|校验码).{0,16}(告诉|提供|发给|报给)",
+        r"(安全账户|屏幕共享|远程控制|陌生链接|不明链接)",
+        r"(下载|安装).{0,12}(App|APP|app|软件)",
+        r"(银行卡号|身份证号|登录密码|支付密码)",
+        r"(刷单|返利|高收益|稳赚|解冻金|保证金|手续费)",
+    )
+    return any(_has_non_negated_match(text, pattern) for pattern in suspicious_patterns)
+
+
+def _has_non_negated_match(text: str, pattern: str) -> bool:
+    for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+        if not _is_negated_match(text, match.start()):
+            return True
+    return False
+
+
+def _is_negated_match(text: str, start: int) -> bool:
+    prefix = text[max(0, start - 18) : start]
+    return bool(re.search(r"(没有|无|未|未见|未听到|不涉及|不存在|不是|并非|没有要求|没有索要)", prefix))
 
 
 def _ordered_unique(values: list[str]) -> list[str]:
