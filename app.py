@@ -1,8 +1,11 @@
+import json
+import traceback
+from pathlib import Path
+
 import gradio as gr
+import librosa
 import spaces
 import torch
-import librosa
-from pathlib import Path
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 from audio_guard import UI_DEFAULT_TRANSCRIPT, build_detection_prompt, make_error_result, normalize_guard_result
 
@@ -34,6 +37,13 @@ def process_audio(audio_path, transcript):
         # 使用 librosa 读取音频并重采样到 16000Hz (Qwen2-Audio的标准采样率)
         audio_array, _ = librosa.load(resolved_audio_path, sr=16000)
         guard_prompt = build_detection_prompt(transcript)
+        print(
+            "[analyze] received "
+            f"audio={Path(resolved_audio_path).name} "
+            f"seconds={len(audio_array) / 16000:.2f} "
+            f"transcript_chars={len((transcript or '').strip())}",
+            flush=True,
+        )
         
         # 构造符合 Qwen2-Audio 要求的对话模板
         messages = [
@@ -51,6 +61,7 @@ def process_audio(audio_path, transcript):
         inputs = processor(
             text=text, 
             audios=audio_array, 
+            sampling_rate=16000,
             return_tensors="pt", 
             padding=True
         )
@@ -75,10 +86,19 @@ def process_audio(audio_path, transcript):
             skip_special_tokens=True, 
             clean_up_tokenization_spaces=False
         )[0]
-        
-        return normalize_guard_result(response, evidence_context=transcript)
+        print(f"[analyze] raw_model_output={response}", flush=True)
+
+        result = normalize_guard_result(response, evidence_context=transcript)
+        print(
+            "[analyze] normalized_output="
+            f"{json.dumps(result, ensure_ascii=False)}",
+            flush=True,
+        )
+
+        return result
 
     except Exception as e:
+        print(f"[analyze] error={traceback.format_exc()}", flush=True)
         return make_error_result(f"处理过程中发生错误：{str(e)}")
 
 

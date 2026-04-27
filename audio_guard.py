@@ -141,6 +141,7 @@ BEHAVIOR_ORDER = [
     "冒充机构人员",
 ]
 BEHAVIORS = set(BEHAVIOR_ORDER)
+FRAUD_GROUNDING_BEHAVIORS = BEHAVIORS - {"冒充机构人员"}
 
 TERM_RULES = {
     "索要验证码": ("验证码", "短信码", "校验码", "动态码"),
@@ -176,7 +177,8 @@ INFERENCE_PATTERNS = {
         r"微信.{0,8}(手机号|号码|添加|加你)",
     ),
     "冒充公检法并威胁": (
-        r"(公安|警号|户政科|检察官|检察院|法院|专案组|通缉令|通缉|洗钱|冻结.{0,10}(资产|账户)|刑事责任|国家机密)",
+        r"(公安|警察|警号|户政科|检察官|检察院|法院|专案组).{0,30}(通缉|洗钱|冻结|刑事责任|国家机密|逮捕|涉案|配合调查)",
+        r"(通缉令|通缉|洗钱|冻结.{0,10}(资产|账户)|刑事责任|国家机密|逮捕|涉案)",
     ),
     "要求保密": (r"(保密|不能告诉|不要告诉|别告诉|泄露国家机密|周边环境.{0,10}安全)",),
     "虚假退款": (r"(退款|退费|理赔|赔付).{0,20}(链接|App|APP|验证码|银行卡|手续费|转账)",),
@@ -265,6 +267,8 @@ def normalize_guard_result(raw_output: str, evidence_context: str | None = None)
     )
 
     _ground_high_risk_behaviors(result, raw_output, evidence_context)
+    _promote_result_from_grounded_evidence(result)
+    _ensure_reason_mentions_grounded_evidence(result)
     _align_result_level(result)
     _apply_safety_downgrades(result, evidence_context)
 
@@ -378,6 +382,37 @@ def _ground_high_risk_behaviors(
     result["high_risk_behaviors"] = _ordered_unique(grounded_behaviors + list(inferred))
 
 
+def _has_fraud_grounding_behavior(behaviors: list[str]) -> bool:
+    return any(behavior in FRAUD_GROUNDING_BEHAVIORS for behavior in behaviors)
+
+
+def _has_grounded_fraud_behavior(result: dict[str, Any]) -> bool:
+    return _has_fraud_grounding_behavior(result["high_risk_behaviors"])
+
+
+def _promote_result_from_grounded_evidence(result: dict[str, Any]) -> None:
+    if not result["evidence"] or not _has_grounded_fraud_behavior(result):
+        return
+
+    result["fraud_result"] = "诈骗"
+    result["risk_level"] = "高"
+    result["has_fraud_evidence"] = True
+    result["suggestion"] = "触发强提醒"
+    if result["confidence"] < 0.6:
+        result["confidence"] = 0.7
+
+
+def _ensure_reason_mentions_grounded_evidence(result: dict[str, Any]) -> None:
+    if not result["evidence"] or not _has_grounded_fraud_behavior(result):
+        return
+    if _infer_high_risk_behaviors(result["reason"]):
+        return
+
+    behaviors = "、".join(result["high_risk_behaviors"])
+    evidence = "；".join(result["evidence"][:2])
+    result["reason"] = f"提取到明确高危行为：{behaviors}。证据：{evidence}"
+
+
 def _align_result_level(result: dict[str, Any]) -> None:
     if result["fraud_result"] == "非诈骗":
         result["has_fraud_evidence"] = False
@@ -395,7 +430,7 @@ def _align_result_level(result: dict[str, Any]) -> None:
 
 
 def _apply_safety_downgrades(result: dict[str, Any], evidence_context: str | None = None) -> None:
-    if result["risk_level"] == "高" and not result["high_risk_behaviors"]:
+    if result["risk_level"] == "高" and not _has_grounded_fraud_behavior(result):
         suspicious = _has_suspicious_signal(_evidence_blob(result["evidence"], result["reason"], evidence_context))
         result["fraud_result"] = "疑似诈骗" if suspicious else "非诈骗"
         result["risk_level"] = "中" if suspicious else "低"
@@ -447,7 +482,8 @@ def _extract_evidence_candidates(text: str) -> list[str]:
         sentence = re.sub(r"\s+", " ", part).strip(" ,，:：")
         if len(sentence) < 4:
             continue
-        if _infer_high_risk_behaviors(sentence):
+        behaviors = _infer_high_risk_behaviors(sentence)
+        if _has_fraud_grounding_behavior(behaviors):
             candidates.append(sentence[:120])
         if len(candidates) >= 5:
             break
@@ -468,7 +504,14 @@ def _evidence_blob(evidence: list[str], reason: str, evidence_context: str | Non
     parts = evidence + [reason]
     if _looks_like_transcript(evidence_context):
         parts.append(evidence_context or "")
-    return _remove_prompt_artifacts(" ".join(parts))
+
+    cleaned_parts = []
+    for part in parts:
+        cleaned = _remove_prompt_artifacts(str(part)).strip()
+        if cleaned:
+            cleaned_parts.append(cleaned)
+
+    return "。".join(cleaned_parts)
 
 
 def _looks_like_transcript(text: str | None) -> bool:
