@@ -65,7 +65,7 @@ def process_audio(audio_path, text_prompt):
             )
             
         # 截取新生成的部分并解码
-        generated_ids = generated_ids[:, inputs.input_ids.size(1):]
+        generated_ids = generated_ids[:, inputs["input_ids"].shape[1]:]
         response = processor.batch_decode(
             generated_ids, 
             skip_special_tokens=True, 
