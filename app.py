@@ -60,10 +60,19 @@ def process_audio(audio_path, transcript):
         # 处理输入数据，转换为 tensor
         inputs = processor(
             text=text, 
-            audios=audio_array, 
+            audio=audio_array,
             sampling_rate=16000,
             return_tensors="pt", 
             padding=True
+        )
+        if "input_features" not in inputs:
+            return make_error_result("模型处理器没有生成音频特征；本次没有进行音频判断。")
+        feature_frames = int(inputs.get("feature_attention_mask", torch.tensor([])).sum().item())
+        print(
+            "[analyze] encoded_audio "
+            f"input_features_shape={tuple(inputs['input_features'].shape)} "
+            f"feature_frames={feature_frames}",
+            flush=True,
         )
         
         # Zero GPU 会在函数执行时分配 CUDA；本地调试时退回到模型所在设备。
