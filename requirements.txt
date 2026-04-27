@@ -1,0 +1,7 @@
+transformers>=4.45.0
+torch
+torchaudio
+librosa
+spaces
+gradio
+accelerate
