@@ -104,5 +104,5 @@ with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
         outputs=output_text
     )
 
-# 启动服务
-demo.launch()
+# 启动服务，关闭 SSR 以避免 asyncio 报错
+demo.launch(ssr_mode=False)
