@@ -2,6 +2,7 @@ import gradio as gr
 import spaces
 import torch
 import librosa
+from pathlib import Path
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 from audio_guard import UI_DEFAULT_TRANSCRIPT, build_detection_prompt, make_error_result, normalize_guard_result
 
@@ -23,12 +24,15 @@ print("模型加载完成！")
 # Zero GPU 只有在执行带有此装饰器的函数时，才会真正分配物理显卡
 @spaces.GPU
 def process_audio(audio_path, transcript):
-    if not audio_path:
-        return make_error_result("请先上传或录制一段音频文件。")
+    resolved_audio_path = resolve_audio_path(audio_path)
+    if not resolved_audio_path:
+        return make_error_result(
+            f"后端没有收到有效音频文件路径，请重新上传或录制后再提交。收到的输入类型：{type(audio_path).__name__}。"
+        )
 
     try:
         # 使用 librosa 读取音频并重采样到 16000Hz (Qwen2-Audio的标准采样率)
-        audio_array, _ = librosa.load(audio_path, sr=16000)
+        audio_array, _ = librosa.load(resolved_audio_path, sr=16000)
         guard_prompt = build_detection_prompt(transcript)
         
         # 构造符合 Qwen2-Audio 要求的对话模板
@@ -77,6 +81,29 @@ def process_audio(audio_path, transcript):
     except Exception as e:
         return make_error_result(f"处理过程中发生错误：{str(e)}")
 
+
+def resolve_audio_path(audio_input):
+    if audio_input is None:
+        return None
+
+    if isinstance(audio_input, (str, Path)):
+        path = str(audio_input)
+        return path if Path(path).exists() else None
+
+    if isinstance(audio_input, dict):
+        for key in ("path", "name", "file", "orig_name"):
+            value = audio_input.get(key)
+            if isinstance(value, (str, Path)) and Path(value).exists():
+                return str(value)
+
+    if hasattr(audio_input, "path"):
+        path = getattr(audio_input, "path")
+        if isinstance(path, (str, Path)) and Path(path).exists():
+            return str(path)
+
+    return None
+
+
 # 3. 构建 Gradio 界面
 with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
     gr.Markdown("# 🛡️ AntiFraud-SFT 电信诈骗音频慢思考检测模型")
@@ -88,7 +115,12 @@ with gr.Blocks(title="AntiFraud-SFT 电信诈骗音频检测") as demo:
     
     with gr.Row():
         with gr.Column():
-            audio_input = gr.Audio(type="filepath", label="上传或录制待检测语音")
+            audio_input = gr.Audio(
+                sources=["upload", "microphone"],
+                type="filepath",
+                label="上传或录制待检测语音",
+                editable=False,
+            )
             text_input = gr.Textbox(
                 label="已知转写（可选，不填也可以）", 
                 value=UI_DEFAULT_TRANSCRIPT,
