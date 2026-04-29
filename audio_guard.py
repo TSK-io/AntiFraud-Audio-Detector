@@ -121,6 +121,17 @@ TELEANTIFRAUD_DETECTION_PROMPT = """
 - 只输出一个 JSON 对象，不要输出 Markdown、解释文字或代码块。
 """.strip()
 
+GUARD_JSON_KEYS = (
+    "fraud_result",
+    "risk_level",
+    "has_fraud_evidence",
+    "confidence",
+    "high_risk_behaviors",
+    "evidence",
+    "reason",
+    "suggestion",
+)
+
 DEFAULT_RESULT = {
     "fraud_result": "无法判断",
     "risk_level": "未知",
@@ -436,7 +447,7 @@ def normalize_guard_result(raw_output: Any, evidence_context: str | None = None)
 
     _align_result_level(result)
 
-    return {key: result.get(key, DEFAULT_RESULT[key]) for key in DEFAULT_RESULT}
+    return {key: result.get(key, DEFAULT_RESULT[key]) for key in GUARD_JSON_KEYS}
 
 
 def _extract_json_objects(text: str) -> list[dict[str, Any]]:
@@ -606,6 +617,24 @@ def _align_result_level(result: dict[str, Any]) -> None:
             "模型置信度低于高风险阈值，已按疑似诈骗处理。",
         )
 
+    if result["fraud_result"] == "诈骗" and not result["high_risk_behaviors"]:
+        result["fraud_result"] = "疑似诈骗"
+        result["reason"] = _append_reason_note(
+            result["reason"],
+            "缺少明确高危行为标签，已按疑似诈骗处理。",
+        )
+
+    if (
+        result["fraud_result"] == "诈骗"
+        and not result["evidence"]
+        and not _reason_mentions_behavior(result["reason"], result["high_risk_behaviors"])
+    ):
+        result["fraud_result"] = "疑似诈骗"
+        result["reason"] = _append_reason_note(
+            result["reason"],
+            "缺少可核验的关键证据或行为说明，已按疑似诈骗处理。",
+        )
+
     if result["fraud_result"] == "非诈骗":
         result["has_fraud_evidence"] = False
         result["risk_level"] = "低"
@@ -626,6 +655,35 @@ def _align_result_level(result: dict[str, Any]) -> None:
         result["risk_level"] = "未知"
         result["high_risk_behaviors"] = []
         result["suggestion"] = "记录但不通知家属"
+
+
+def _reason_mentions_behavior(reason: str, behaviors: list[str]) -> bool:
+    if not reason:
+        return False
+    if any(behavior in reason for behavior in behaviors):
+        return True
+
+    behavior_keywords = {
+        "索要验证码": ("验证码",),
+        "诱导转账": ("转账", "打款", "汇款", "付款", "支付", "手续费", "保证金", "解冻金", "指定账户"),
+        "安全账户": ("安全账户", "监管账户", "清查账户"),
+        "屏幕共享/远程控制": ("屏幕共享", "共享屏幕", "远程控制", "远程协助"),
+        "要求下载陌生App/添加微信": ("下载", "安装", "App", "APP", "app", "软件", "添加微信", "加微信"),
+        "冒充公检法并威胁": ("公安", "警察", "检察院", "法院", "通缉", "坐牢", "逮捕", "冻结"),
+        "要求保密": ("保密", "不要告诉", "不能告诉", "不要报警", "不要挂电话"),
+        "虚假退款": ("退款", "理赔", "退费", "赔付", "赔偿"),
+        "刷单返利": ("刷单", "返利", "做任务", "返佣", "佣金"),
+        "高收益投资理财": ("投资", "理财", "高收益", "稳赚", "导师带单", "荐股", "虚拟币", "USDT"),
+        "冒充熟人借钱": ("借钱", "周转", "垫付", "换号"),
+        "索要银行卡/身份证/密码": ("银行卡", "身份证", "密码", "卡号", "CVV", "cvv"),
+        "引导点击陌生链接": ("链接", "网址", "http", "www", "点击", "打开"),
+        "冒充机构人员": ("客服", "官方", "银行", "平台", "快递", "医保", "社保", "税务", "老师", "学校"),
+    }
+    return any(
+        keyword in reason
+        for behavior in behaviors
+        for keyword in behavior_keywords.get(behavior, ())
+    )
 
 
 def _coerce_bool(value: Any) -> bool | None:

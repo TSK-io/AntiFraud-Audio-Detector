@@ -4,6 +4,7 @@ import unittest
 
 from audio_guard import (
     DEFAULT_RESULT,
+    GUARD_JSON_KEYS,
     analyze_chat_text,
     build_detection_prompt,
     make_error_result,
@@ -82,6 +83,63 @@ class NormalizeGuardResultTest(unittest.TestCase):
         self.assertTrue(result["has_fraud_evidence"])
         self.assertEqual(result["high_risk_behaviors"], ["诱导转账"])
         self.assertEqual(result["evidence"], ["现在转到指定账户"])
+
+    def test_app_required_json_matches_improved_log_contract(self):
+        result = normalize_guard_result(
+            {
+                "fraud_result": "诈骗",
+                "risk_level": "高",
+                "has_fraud_evidence": True,
+                "confidence": 0.95,
+                "high_risk_behaviors": ["诱导转账", "要求下载陌生App/添加微信", "虚假退款"],
+                "evidence": [
+                    "可疑通话方以学校老师身份诱导添加微信并要求转账解决学士论文问题",
+                    "涉及诱导下载软件、支付手续费等高风险行为",
+                ],
+                "reason": "通话方冒充学校老师，以学术论文问题为由诱导添加微信并要求转账解决，符合虚假退款/诱导转账的诈骗特征",
+                "suggestion": "触发强提醒",
+            }
+        )
+
+        self.assertEqual(list(result), list(GUARD_JSON_KEYS))
+        self.assertEqual(
+            result,
+            {
+                "fraud_result": "诈骗",
+                "risk_level": "高",
+                "has_fraud_evidence": True,
+                "confidence": 0.95,
+                "high_risk_behaviors": ["诱导转账", "要求下载陌生App/添加微信", "虚假退款"],
+                "evidence": [
+                    "可疑通话方以学校老师身份诱导添加微信并要求转账解决学士论文问题",
+                    "涉及诱导下载软件、支付手续费等高风险行为",
+                ],
+                "reason": "通话方冒充学校老师，以学术论文问题为由诱导添加微信并要求转账解决，符合虚假退款/诱导转账的诈骗特征",
+                "suggestion": "触发强提醒",
+            },
+        )
+
+    def test_high_risk_without_behavior_is_downgraded(self):
+        result = normalize_guard_result(
+            json.dumps(
+                {
+                    "fraud_result": "诈骗",
+                    "risk_level": "高",
+                    "has_fraud_evidence": True,
+                    "confidence": 0.95,
+                    "high_risk_behaviors": [],
+                    "evidence": ["对方说情况很严重"],
+                    "reason": "缺少明确高危动作。",
+                    "suggestion": "触发强提醒",
+                },
+                ensure_ascii=False,
+            )
+        )
+
+        self.assertEqual(result["fraud_result"], "疑似诈骗")
+        self.assertEqual(result["risk_level"], "中")
+        self.assertEqual(result["suggestion"], "记录但不通知家属")
+        self.assertIn("缺少明确高危行为标签", result["reason"])
 
     def test_prompt_requests_full_guard_schema(self):
         prompt = build_detection_prompt("辅助转写")
